@@ -1,3 +1,10 @@
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
+
 #include "systemcalls.h"
 
 /**
@@ -17,7 +24,8 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+    int status = system(cmd);
+    return (status == 0) ? true : false;
 }
 
 /**
@@ -45,9 +53,8 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+    va_end(args);
+
 
 /*
  * TODO:
@@ -58,10 +65,46 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid_t pid = fork();
 
-    va_end(args);
+    if (pid == -1) {
+        // Fork failed
+        perror("Fork failed");
+        return false;
+    } else if (pid == 0) {
+        // Child process
+        if (execv(command[0], command) == -1) {
+            // execv failed
+            perror("Execv failed");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        // Parent process
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            // waitpid failed
+            perror("Waitpid failed");
+            return false;
+        } else {
+            // Check if child process terminated normally
+            if (WIFEXITED(status)) {
+                // Check the exit status of the child process
+                if (WEXITSTATUS(status) == 0) {
+                    // Child process exited successfully
+                    return true;
+                } else {
+                    // Child process exited with non-zero status
+                    return false;
+                }
+            } else {
+                // Child process did not terminate normally
+                return false;
+            }
+        }
+    }
 
-    return true;
+    // This point should not be reached under normal circumstances
+    return false;
 }
 
 /**
@@ -80,9 +123,8 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+
+    va_end(args);
 
 
 /*
@@ -93,7 +135,68 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
-    va_end(args);
+    // Open the output file for writing, creating it if it does not exist, and truncating it if it does
+    int output_fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (output_fd == -1) {
+        perror("Failed to open output file");
+        return false;
+    }
 
-    return true;
+    pid_t pid = fork();
+
+    if (pid == -1) {
+        // Fork failed
+        perror("Fork failed");
+        close(output_fd); // Close the output file descriptor before returning
+        return false;
+    } else if (pid == 0) {
+        // Child process
+        // Redirect standard output to the output file
+        if (dup2(output_fd, STDOUT_FILENO) == -1) {
+            perror("Failed to redirect standard output");
+            close(output_fd); // Close the output file descriptor before exiting
+            exit(EXIT_FAILURE);
+        }
+
+        // Close the duplicated output file descriptor since it's no longer needed
+        close(output_fd);
+
+        // Execute the command
+        if (execv(command[0], command) == -1) {
+            // execv failed
+            perror("Execv failed");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        // Parent process
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            // waitpid failed
+            perror("Waitpid failed");
+            close(output_fd); // Close the output file descriptor before returning
+            return false;
+        } else {
+            // Check if child process terminated normally
+            if (WIFEXITED(status)) {
+                // Check the exit status of the child process
+                if (WEXITSTATUS(status) == 0) {
+                    // Child process exited successfully
+                    close(output_fd); // Close the output file descriptor before returning
+                    return true;
+                } else {
+                    // Child process exited with non-zero status
+                    close(output_fd); // Close the output file descriptor before returning
+                    return false;
+                }
+            } else {
+                // Child process did not terminate normally
+                close(output_fd); // Close the output file descriptor before returning
+                return false;
+            }
+        }
+    }
+
+    // This point should not be reached under normal circumstances
+    close(output_fd); // Close the output file descriptor before returning
+    return false;
 }
